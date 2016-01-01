@@ -100,7 +100,6 @@ namespace lndbackup
                 Console.WriteLine("     Currently available regions are toronto, montreal, and roubaix");
             }
 
-            Console.WriteLine();
             Console.WriteLine("done");
 
             if (Debugger.IsAttached) Console.ReadKey();
@@ -136,46 +135,29 @@ namespace lndbackup
             Console.WriteLine($"  - region  : {Details.extra.region}");
 
             // Take a snapshot of the VM
-            Console.WriteLine($"  - Creating snapshot...");
+            Console.WriteLine($"  - Creating snapshot image...");
             string NewImageName = $"lndbackup {vmId} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
             int NewImageId = await client.VMSnapshotAsync(vmId, NewImageName);
-            Console.WriteLine($"    - New image {NewImageId} queued for creation!");
+            Console.WriteLine($"    - New snapshot image {NewImageId} queued for creation!");
 
             // Wait for new image to be 'active'
-            string NewImageStatus = (await client.ImageDetailsAsync(NewImageId)).status;
-            while (NewImageStatus != "active")
-            {
-                Console.WriteLine($"      - Image status is '{NewImageStatus}', waiting 30 seconds for 'active'...");
-                Thread.Sleep(30000);
-                NewImageStatus = (await client.ImageDetailsAsync(NewImageId)).status;
-            }
-            Console.WriteLine("      - Image status is 'active'!");
+            WaitForImageToBecomeActive(client, NewImageId);
 
             // Replicate image to new region (if necessary)
             if (Details.extra.region != destinationRegion)
             {
                 // Replicate the image to the new region
-                Console.WriteLine($"  - Replicating image...");
+                Console.WriteLine($"  - Replicating snapshot image...");
                 int ReplicatedImageId = await client.ImageReplicateAsync(NewImageId, destinationRegion);
-                Console.WriteLine($"    - New image {ReplicatedImageId} queued for replication!");
+                Console.WriteLine($"    - New snapshot image {ReplicatedImageId} queued for replication!");
 
                 // Wait for new image to be 'active'
-                string ReplicatedImageStatus = (await client.ImageDetailsAsync(ReplicatedImageId)).status;
-                while (ReplicatedImageStatus != "active")
-                {
-                    // TODO One one run status was 'killed'.  Do we abort, or delete and retry replication, or ?
-                    //      Maybe instead of looking for 'killed', look for NOT 'queued' or 'saving'?
-                    //      There's the snapshot watch above too (maybe this duplicate logic should be extracted to its own method)
-                    Console.WriteLine($"      - Image status is '{ReplicatedImageStatus}', waiting 30 seconds for 'active'...");
-                    Thread.Sleep(30000);
-                    ReplicatedImageStatus = (await client.ImageDetailsAsync(ReplicatedImageId)).status;
-                }
-                Console.WriteLine("      - Image status is 'active'!");
+                WaitForImageToBecomeActive(client, ReplicatedImageId);
 
-                // Delete "new" image, leaving only replicated image
-                Console.WriteLine($"  - Removing old image...");
+                // Delete original image, leaving only replicated image
+                Console.WriteLine($"  - Removing original snapshot...");
                 await client.ImageDeleteAsync(NewImageId);
-                Console.WriteLine($"    - Old image {NewImageId} deleted!");
+                Console.WriteLine($"    - Original snapshot {NewImageId} deleted!");
 
                 NewImageId = ReplicatedImageId;
             }
@@ -187,15 +169,30 @@ namespace lndbackup
             Directory.CreateDirectory(ImagesDirectory);
             await client.ImageRetrieveAsync(NewImageId, Path.Combine(ImagesDirectory, CleanFilename), (s, e) =>
             {
-                Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} ({e.ProgressPercentage:P})...");
+                Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} bytes ({e.ProgressPercentage:P})...");
             });
             Console.WriteLine();
             Console.WriteLine("    - Image downloaded successfully!");
 
-            // TODO Use ImageList to find old lndbackup generated images for this VM and delete them
+            // TODO Use client.ImageList to find old lndbackup generated images for this VM and delete them
 
             Console.WriteLine();
             Console.WriteLine();
+        }
+
+        private static async void WaitForImageToBecomeActive(LNDynamic client, int newImageId)
+        {
+            string NewImageStatus = (await client.ImageDetailsAsync(newImageId)).status;
+            while (NewImageStatus != "active")
+            {
+                // TODO One one run status was 'killed'.  Do we abort, or delete and retry replication, or ?
+                //      Maybe instead of looking for 'killed', look for NOT 'queued' or 'saving'?
+                //      There's the snapshot watch above too (maybe this duplicate logic should be extracted to its own method)
+                Console.WriteLine($"      - Image status is '{NewImageStatus}', waiting 30 seconds for 'active'...");
+                Thread.Sleep(30000);
+                NewImageStatus = (await client.ImageDetailsAsync(newImageId)).status;
+            }
+            Console.WriteLine("      - Image status is 'active'!");
         }
     }
 }
