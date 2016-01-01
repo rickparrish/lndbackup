@@ -2,7 +2,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,7 +37,26 @@ namespace lndbackup
                         {
                             foreach (int VMID in VMIDsToBackup)
                             {
-                                await HandleBackup(client, VMID, args[3]);
+                                try
+                                {
+                                    await HandleBackup(client, VMID, args[3]);
+                                }
+                                catch (LNDException lndex)
+                                {
+                                    Console.WriteLine($"lndapi error: {(Debugger.IsAttached ? lndex.ToString() : lndex.Message)}");
+                                    Console.WriteLine();
+                                    Console.WriteLine("  - Moving on to next VM to backup...");
+                                    Console.WriteLine();
+                                    Console.WriteLine();
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"fatal error: {(Debugger.IsAttached ? ex.ToString() : ex.Message)}");
+                                    Console.WriteLine();
+                                    Console.WriteLine("  - Moving on to next VM to backup...");
+                                    Console.WriteLine();
+                                    Console.WriteLine();
+                                }
                             }
                         }
                     }
@@ -109,7 +130,7 @@ namespace lndbackup
             return Result;
         }
 
-        private static async Task HandleBackup(LNDynamic client, int vmId, string destination)
+        private static async Task HandleBackup(LNDynamic client, int vmId, string destinationRegion)
         {
             Console.WriteLine($"- Backing up VMID {vmId}...");
             var Details = await client.VMInfoAsync(vmId);
@@ -118,22 +139,65 @@ namespace lndbackup
 
             // Take a snapshot of the VM
             Console.WriteLine($"  - Creating snapshot...");
-            int NewImageId = await client.VMSnapshotAsync(vmId, $"lndbackup {vmId} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}");
+            string NewImageName = $"lndbackup {vmId} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
+            int NewImageId = await client.VMSnapshotAsync(vmId, NewImageName);
             Console.WriteLine($"    - New image {NewImageId} queued for creation!");
 
             // Wait for new image to be 'active'
             string NewImageStatus = (await client.ImageDetailsAsync(NewImageId)).status;
-            while (NewImageStatus != "active") {
+            while (NewImageStatus != "active")
+            {
                 Console.WriteLine($"      - Image status is '{NewImageStatus}', waiting 30 seconds for 'active'...");
                 Thread.Sleep(30000);
                 NewImageStatus = (await client.ImageDetailsAsync(NewImageId)).status;
             }
             Console.WriteLine("      - Image status is 'active'!");
 
-            // TODO Replicate image to new region (if necessary)
-            // TODO Delete original image
-            // TODO Delete other lndbackup generated images for this VM
-            // TODO Download image (what filename format to use?)        
+            // Replicate image to new region (if necessary)
+            if (Details.extra.region != destinationRegion)
+            {
+                // Replicate the image to the new region
+                Console.WriteLine($"  - Replicating image...");
+                int ReplicatedImageId = await client.ImageReplicateAsync(NewImageId, destinationRegion);
+                Console.WriteLine($"    - New image {ReplicatedImageId} queued for replication!");
+
+                // Wait for new image to be 'active'
+                string ReplicatedImageStatus = (await client.ImageDetailsAsync(ReplicatedImageId)).status;
+                while (ReplicatedImageStatus != "active")
+                {
+                    // TODO One one run status was 'killed'.  Do we abort, or delete and retry replication, or ?
+                    //      Maybe instead of looking for 'killed', look for NOT 'queued' or 'saving'?
+                    //      There's the snapshot watch above too (maybe this duplicate logic should be extracted to its own method)
+                    Console.WriteLine($"      - Image status is '{ReplicatedImageStatus}', waiting 30 seconds for 'active'...");
+                    Thread.Sleep(30000);
+                    ReplicatedImageStatus = (await client.ImageDetailsAsync(ReplicatedImageId)).status;
+                }
+                Console.WriteLine("      - Image status is 'active'!");
+
+                // Delete "new" image, leaving only replicated image
+                Console.WriteLine($"  - Removing old image...");
+                await client.ImageDeleteAsync(NewImageId);
+                Console.WriteLine($"    - Old image {NewImageId} deleted!");
+
+                NewImageId = ReplicatedImageId;
+            }
+
+            // Download new image
+            string ImagesDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Images");
+            string CleanFilename = string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img";
+            Console.WriteLine($"  - Downloading image {NewImageId} to {CleanFilename}...");
+            Directory.CreateDirectory(ImagesDirectory);
+            await client.ImageRetrieveAsync(NewImageId, Path.Combine(ImagesDirectory, CleanFilename), (s, e) =>
+            {
+                Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} ({e.ProgressPercentage:P})...");
+            });
+            Console.WriteLine();
+            Console.WriteLine("    - Image downloaded successfully!");
+
+            // TODO Use ImageList to find old lndbackup generated images for this VM and delete them
+
+            Console.WriteLine();
+            Console.WriteLine();
         }
     }
 }
