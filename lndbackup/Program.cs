@@ -111,13 +111,25 @@ namespace lndbackup
 
         private static async Task HandleBackup(LNDynamic client, int vmId, string destination)
         {
-            Console.WriteLine($"Backing up VMID {vmId}");
+            Console.WriteLine($"- Backing up VMID {vmId}...");
             var Details = await client.VMInfoAsync(vmId);
-            Console.WriteLine($"  hostname: {Details.extra.hostname}");
-            Console.WriteLine($"  region  : {Details.extra.region}");
+            Console.WriteLine($"  - hostname: {Details.extra.hostname}");
+            Console.WriteLine($"  - region  : {Details.extra.region}");
 
-            // TODO Take a snapshot (what filename format to use?)
-            // TODO Monitor image to see when snapshot has completed
+            // Take a snapshot of the VM
+            Console.WriteLine($"  - Creating snapshot...");
+            int NewImageId = await client.VMSnapshotAsync(vmId, $"lndbackup {vmId} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}");
+            Console.WriteLine($"    - New image {NewImageId} queued for creation!");
+
+            // Wait for new image to be 'active'
+            string NewImageStatus = (await client.ImageDetailsAsync(NewImageId)).status;
+            while (NewImageStatus != "active") {
+                Console.WriteLine($"      - Image status is '{NewImageStatus}', waiting 30 seconds for 'active'...");
+                Thread.Sleep(30000);
+                NewImageStatus = (await client.ImageDetailsAsync(NewImageId)).status;
+            }
+            Console.WriteLine("      - Image status is 'active'!");
+
             // TODO Replicate image to new region (if necessary)
             // TODO Delete original image
             // TODO Delete other lndbackup generated images for this VM
