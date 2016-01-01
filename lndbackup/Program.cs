@@ -13,8 +13,6 @@ namespace lndbackup
 {
     class Program
     {
-        private static object _ImageRetrievedProgressChangedLock = new object();
-
         static void Main(string[] args)
         {
             MainAsync(args).GetAwaiter().GetResult();
