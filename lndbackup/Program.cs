@@ -156,7 +156,7 @@ namespace lndbackup
                 await client.ImageDeleteAsync(NewImageId);
                 if (SnapshotRetries++ < 3)
                 {
-                    Console.WriteLine($"    - Creation failed, waiting 30 seconds for retry #{SnapshotRetries}/3");
+                    Console.WriteLine($"    - Snapshot failed, waiting 30 seconds for retry {SnapshotRetries} of 3");
                     Thread.Sleep(30000);
                     goto RetrySnapshot;
                 }
@@ -183,7 +183,7 @@ namespace lndbackup
                     await client.ImageDeleteAsync(ReplicatedImageId);
                     if (ReplicateRetries++ < 3)
                     {
-                        Console.WriteLine($"    - Creation failed, waiting 30 seconds for retry #{ReplicateRetries}/3");
+                        Console.WriteLine($"    - Replication failed, waiting 30 seconds for retry {ReplicateRetries} of 3");
                         Thread.Sleep(30000);
                         goto RetryReplicate;
                     }
