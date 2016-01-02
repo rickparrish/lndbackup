@@ -155,54 +155,37 @@ namespace lndbackup
             Console.WriteLine($"  - region  : {Details.extra.region}");
 
             // Take a snapshot of the VM
-            int SnapshotRetries = 0;
-            RetrySnapshot:
             Console.WriteLine($"  - Creating snapshot image...");
             string NewImageName = $"lndbackup {vmId} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
-            int NewImageId = await client.VMSnapshotAsync(vmId, NewImageName);
-            Console.WriteLine($"    - New snapshot image {NewImageId} queued for creation!");
-
-            // Wait for new image to be 'active'
-            try {
-                await WaitForImageToBecomeActive(client, NewImageId);
-            } catch (LNDImageKilledException) {
-                await client.ImageDeleteAsync(NewImageId);
-                if (SnapshotRetries++ < 3)
-                {
-                    Console.WriteLine($"    - Snapshot failed, waiting 30 seconds for retry {SnapshotRetries} of 3");
-                    Thread.Sleep(30000);
-                    goto RetrySnapshot;
-                }
-                throw;
-            }
+            int NewImageId = await client.VMSnapshotAndWaitAsync(vmId, NewImageName, (s, e) =>
+            {
+                Console.WriteLine($"    - New snapshot image {e.ImageId} queued for creation!");
+            }, (s, e) =>
+            {
+                Console.WriteLine($"      - Image status is '{e.Status}', waiting 30 seconds for 'active'...");
+            }, (s, e) =>
+            {
+                Console.WriteLine($"    - Snapshot failed, waiting 30 seconds for retry {e.RetryNumber} of {e.MaxRetries}");
+            });
+            Console.WriteLine("      - Image status is 'active'!");
 
             // Replicate image to new region (if necessary)
             if (Details.extra.region != destinationRegion)
             {
                 // Replicate the image to the new region
-                int ReplicateRetries = 0;
-                RetryReplicate:
                 Console.WriteLine($"  - Replicating snapshot image to {destinationRegion}...");
-                int ReplicatedImageId = await client.ImageReplicateAsync(NewImageId, destinationRegion);
-                Console.WriteLine($"    - New snapshot image {ReplicatedImageId} queued for replication!");
-
-                // Wait for new image to be 'active'
-                try
+                int ReplicatedImageId = await client.ImageReplicateAndWaitAsync(NewImageId, destinationRegion, (s, e) =>
                 {
-                    await WaitForImageToBecomeActive(client, ReplicatedImageId);
-                }
-                catch (LNDImageKilledException)
+                    Console.WriteLine($"    - New replication image {e.ImageId} queued for creation!");
+                }, (s, e) =>
                 {
-                    await client.ImageDeleteAsync(ReplicatedImageId);
-                    if (ReplicateRetries++ < 3)
-                    {
-                        Console.WriteLine($"    - Replication failed, waiting 30 seconds for retry {ReplicateRetries} of 3");
-                        Thread.Sleep(30000);
-                        goto RetryReplicate;
-                    }
-                    throw;
-                }
-
+                    Console.WriteLine($"      - Image status is '{e.Status}', waiting 30 seconds for 'active'...");
+                }, (s, e) =>
+                {
+                    Console.WriteLine($"    - Replication failed, waiting 30 seconds for retry {e.RetryNumber} of {e.MaxRetries}");
+                });
+                Console.WriteLine("      - Image status is 'active'!");
+                
                 // Delete original image, leaving only replicated image
                 Console.WriteLine($"  - Removing original snapshot...");
                 await client.ImageDeleteAsync(NewImageId);
@@ -212,6 +195,8 @@ namespace lndbackup
             }
 
             // Download new image
+            // TODO Faster to download from Toronto for me -- maybe have option to specify preferred region to download
+            //      from, so in my case it would download from Toronto before replicating to Roubaix
             string CleanFilename = string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img";
             Console.WriteLine($"  - Downloading image {NewImageId} to {Path.Combine(destinationDirectory, CleanFilename)}...");
             await client.ImageRetrieveAsync(NewImageId, Path.Combine(destinationDirectory, CleanFilename), (s, e) =>
@@ -223,20 +208,6 @@ namespace lndbackup
 
             // TODO Use client.ImageList to find old lndbackup generated images for this VM and delete them
             // TODO Also delete old lndbackup generated images for this VM from the local filesystem
-        }
-
-        private static async Task WaitForImageToBecomeActive(LNDynamic client, int newImageId)
-        {
-            string NewImageStatus = (await client.ImageDetailsAsync(newImageId)).status;
-            while (NewImageStatus != "active")
-            {
-                if (NewImageStatus == "killed") throw new LNDImageKilledException("image status=killed");
-
-                Console.WriteLine($"      - Image status is '{NewImageStatus}', waiting 30 seconds for 'active'...");
-                Thread.Sleep(30000);
-                NewImageStatus = (await client.ImageDetailsAsync(newImageId)).status;
-            }
-            Console.WriteLine("      - Image status is 'active'!");
         }
     }
 }
