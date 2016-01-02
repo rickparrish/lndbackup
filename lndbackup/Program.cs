@@ -20,13 +20,22 @@ namespace lndbackup
 
         static async Task MainAsync(string[] args)
         {
-            if (args.Length == 4)
+            if (args.Length == 5)
             {
                 try
                 {
-                    using (LNDynamic client = new LNDynamic(args[0], args[1]))
+                    string Source = args[0];
+                    string DestinationRegion = args[1];
+                    string DestinationDirectory = args[2];
+                    string APIID = args[3];
+                    string APIKey = args[4];
+
+                    // Ensure destination directory exists, or program fails right away if it can't be created
+                    Directory.CreateDirectory(DestinationDirectory);
+
+                    using (LNDynamic client = new LNDynamic(APIID, APIKey))
                     {
-                        List<int> VMIDsToBackup = await GetVMIDsToBackup(client, args[2]);
+                        List<int> VMIDsToBackup = await GetVMIDsToBackup(client, Source);
                         if (VMIDsToBackup.Count == 0)
                         {
                             Console.WriteLine("Nothing to backup!");
@@ -38,7 +47,7 @@ namespace lndbackup
                             {
                                 try
                                 {
-                                    await HandleBackup(client, VMID, args[3]);
+                                    await HandleBackup(client, VMID, DestinationRegion, DestinationDirectory);
                                 }
                                 catch (LNDException lndex)
                                 {
@@ -68,38 +77,42 @@ namespace lndbackup
                 {
                     Console.WriteLine($"fatal error: {(Debugger.IsAttached ? ex.ToString() : ex.Message)}");
                 }
+
+                Console.WriteLine();
+                Console.WriteLine("done");
             }
             else
             {
                 DisplayUsage();
             }
 
-            Console.WriteLine();
-            Console.WriteLine("done");
-
             if (Debugger.IsAttached) Console.ReadKey();
         }
 
         private static void DisplayUsage()
         {
-            Console.WriteLine("USAGE: lndbackup <api_id> <api_key> <source> <destination>");
             Console.WriteLine();
-            Console.WriteLine("     api_id           API ID from lndynamic control panel");
-            Console.WriteLine("     api_key          API Key from lndynamic control panel");
-            Console.WriteLine("     source           vm_id or region name to backup");
-            Console.WriteLine("     destination      region name to replicate snapshots to");
+            Console.WriteLine("USAGE");
+            Console.WriteLine();
+            Console.WriteLine("     lndbackup <src> <dst_region> <dst_dir> <api_id> <api_key>");
+            Console.WriteLine();
+            Console.WriteLine("     src             vm_id or region name to backup");
+            Console.WriteLine("     dst_region      region name to replicate snapshots to");
+            Console.WriteLine("     dst_dir         local path to download snapshots to");
+            Console.WriteLine("     api_id          API ID from lndynamic control panel");
+            Console.WriteLine("     api_key         API Key from lndynamic control panel");
             Console.WriteLine();
             Console.WriteLine("EXAMPLES");
             Console.WriteLine();
-            Console.WriteLine("     lndbackup api_id api_key 12345 toronto");
-            Console.WriteLine("     Backup VM with id 12345 and replicate the snapshot to Toronto");
+            Console.WriteLine("     lndbackup 12345 toronto c:\\lndbackup api_id api_key");
+            Console.WriteLine("     Backup VM with id 12345, replicate to Toronto, download to c:\\lndbackup");
             Console.WriteLine("     (If the VM is provisioned in Toronto, no replication occurs)");
             Console.WriteLine();
-            Console.WriteLine("     lndbackup api_id api_key toronto roubaix");
-            Console.WriteLine("     Backup all VMs in Toronto and replicate the snapshots to Roubaix");
+            Console.WriteLine("     lndbackup toronto roubaix c:\\lndbackup api_id api_key");
+            Console.WriteLine("     Backup all Toronto VMs, replicate to Roubaix, download to c:\\lndbackup");
             Console.WriteLine();
-            Console.WriteLine("     lndbackup api_id api_key montreal montreal");
-            Console.WriteLine("     Backup all VMs in Montreal, and don't replicate the snapshots");
+            Console.WriteLine("     lndbackup montreal montreal c:\\lndbackup api_id api_key");
+            Console.WriteLine("     Backup all Montreal VMs, don't replicate, download to c:\\lndbackup");
             Console.WriteLine();
             Console.WriteLine("VM_IDs");
             Console.WriteLine();
@@ -134,7 +147,7 @@ namespace lndbackup
             return Result;
         }
 
-        private static async Task HandleBackup(LNDynamic client, int vmId, string destinationRegion)
+        private static async Task HandleBackup(LNDynamic client, int vmId, string destinationRegion, string destinationDirectory)
         {
             Console.WriteLine($"- Backing up VMID {vmId}...");
             var Details = await client.VMInfoAsync(vmId);
@@ -199,11 +212,9 @@ namespace lndbackup
             }
 
             // Download new image
-            string ImagesDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Images");
             string CleanFilename = string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img";
-            Console.WriteLine($"  - Downloading image {NewImageId} to {CleanFilename}...");
-            Directory.CreateDirectory(ImagesDirectory);
-            await client.ImageRetrieveAsync(NewImageId, Path.Combine(ImagesDirectory, CleanFilename), (s, e) =>
+            Console.WriteLine($"  - Downloading image {NewImageId} to {Path.Combine(destinationDirectory, CleanFilename)}...");
+            await client.ImageRetrieveAsync(NewImageId, Path.Combine(destinationDirectory, CleanFilename), (s, e) =>
             {
                 Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} bytes ({e.ProgressPercentage:P})...");
             });
@@ -211,6 +222,7 @@ namespace lndbackup
             Console.WriteLine("    - Image downloaded successfully!");
 
             // TODO Use client.ImageList to find old lndbackup generated images for this VM and delete them
+            // TODO Also delete old lndbackup generated images for this VM from the local filesystem
         }
 
         private static async Task WaitForImageToBecomeActive(LNDynamic client, int newImageId)
@@ -218,9 +230,6 @@ namespace lndbackup
             string NewImageStatus = (await client.ImageDetailsAsync(newImageId)).status;
             while (NewImageStatus != "active")
             {
-                // TODO One one run status was 'killed'.  Do we abort, or delete and retry replication, or ?
-                //      Maybe instead of looking for 'killed', look for NOT 'queued' or 'saving'?
-                //      There's the snapshot watch above too (maybe this duplicate logic should be extracted to its own method)
                 if (NewImageStatus == "killed") throw new LNDImageKilledException("image status=killed");
 
                 Console.WriteLine($"      - Image status is '{NewImageStatus}', waiting 30 seconds for 'active'...");
