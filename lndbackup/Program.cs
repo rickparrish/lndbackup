@@ -157,15 +157,15 @@ namespace lndbackup
             // Take a snapshot of the VM
             Console.WriteLine($"  - Creating snapshot image...");
             string NewImageName = $"lndbackup {vmId} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
-            int NewImageId = await client.VMSnapshotAndWaitAsync(vmId, NewImageName, (s, e) =>
+            int NewImageId = await client.VMSnapshotAndWaitAsync(vmId, NewImageName, 60, 3, (s, e) =>
             {
                 Console.WriteLine($"    - New snapshot image {e.ImageId} queued for creation!");
             }, (s, e) =>
             {
-                Console.WriteLine($"      - Image status is '{e.Status}', waiting 30 seconds for 'active'...");
+                Console.WriteLine($"      - Image status is '{e.Status}', waiting {e.WaitSeconds} seconds for 'active'...");
             }, (s, e) =>
             {
-                Console.WriteLine($"    - Snapshot failed, waiting 30 seconds for retry {e.RetryNumber} of {e.MaxRetries}");
+                Console.WriteLine($"    - Retry {e.RetryNumber} of {e.MaxRetries}");
             });
             Console.WriteLine("      - Image status is 'active'!");
 
@@ -174,15 +174,15 @@ namespace lndbackup
             {
                 // Replicate the image to the new region
                 Console.WriteLine($"  - Replicating snapshot image to {destinationRegion}...");
-                int ReplicatedImageId = await client.ImageReplicateAndWaitAsync(NewImageId, destinationRegion, (s, e) =>
+                int ReplicatedImageId = await client.ImageReplicateAndWaitAsync(NewImageId, destinationRegion, 30, 3, (s, e) =>
                 {
                     Console.WriteLine($"    - New replication image {e.ImageId} queued for creation!");
                 }, (s, e) =>
                 {
-                    Console.WriteLine($"      - Image status is '{e.Status}', waiting 30 seconds for 'active'...");
+                    Console.WriteLine($"      - Image status is '{e.Status}', waiting {e.WaitSeconds} seconds for 'active'...");
                 }, (s, e) =>
                 {
-                    Console.WriteLine($"    - Replication failed, waiting 30 seconds for retry {e.RetryNumber} of {e.MaxRetries}");
+                    Console.WriteLine($"    - Retry {e.RetryNumber} of {e.MaxRetries}");
                 });
                 Console.WriteLine("      - Image status is 'active'!");
                 
