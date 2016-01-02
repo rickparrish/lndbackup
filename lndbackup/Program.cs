@@ -174,7 +174,7 @@ namespace lndbackup
             {
                 // Replicate the image to the new region
                 Console.WriteLine($"  - Replicating snapshot image to {destinationRegion}...");
-                int ReplicatedImageId = await client.ImageReplicateAndWaitAsync(NewImageId, destinationRegion, 30, 3, (s, e) =>
+                int ReplicatedImageId = await client.ImageReplicateAndWaitAsync(NewImageId, destinationRegion, 60, 3, (s, e) =>
                 {
                     Console.WriteLine($"    - New replication image {e.ImageId} queued for creation!");
                 }, (s, e) =>
