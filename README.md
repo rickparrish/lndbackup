@@ -1,6 +1,10 @@
 # lndbackup
 Backup your Luna Node VMs using the Luna Node Dynamic API via the <a href="https://github.com/rickparrish/lndapi">lndapi</a> wrapper
 
+# DOWNLOAD
+
+Download <a href="https://github.com/rickparrish/lndbackup/raw/master/lndbackup/bin/Release/lndapi.dll">lndapi.dll</a> and <a href="https://github.com/rickparrish/lndbackup/raw/master/lndbackup/bin/Release/lndbackup.exe">lndbackup.exe</a>
+
 # USAGE
 
 Step 1) Create some VMs at <a href="https://dynamic.lunanode.com/info.php?r=2427">Luna Node</a> (aff. link)<br />
