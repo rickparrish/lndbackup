@@ -9,4 +9,4 @@ Step 3) Use lndbackup to backup your VMs (lndbackup also needs <a href="https://
 
 Additional usage information can be found by running lndbackup without any command-line parameters.
 
-** Legacy access is required.  For added security you can set the access restrictions to <strong>vm.list, vm.info, vm.snapshot, image.details, image.replicate, image.delete, image.retrieve</strong>, since that's all that lndbackup needs.
+** Legacy access is required.  For added security you can set the access restrictions to <strong>vm.list,vm.info,vm.snapshot,image.details,image.replicate,image.delete,image.retrieve,image.list</strong> (no spaces), since that's all that lndbackup needs.

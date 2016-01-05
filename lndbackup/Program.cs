@@ -71,14 +71,15 @@ namespace lndbackup
                             Console.WriteLine($"  - hostname: {Details.extra.hostname}");
                             Console.WriteLine($"  - region  : {Details.extra.region}");
 
-                            string NewImageName = $"lndbackup {VMID} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
+                            string NewImagePrefix = $"lndbackup {VMID}";
+                            string NewImageName = $"{NewImagePrefix} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
                             string NewImageFilename = Path.Combine(DestinationDirectory, string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img");
 
                             int NewImageId = await DoSnapshot(client, VMID, NewImageName);
                             if (Details.extra.region != DestinationRegion) NewImageId = await DoReplicate(client, NewImageId, DestinationRegion);
                             await DoDownload(client, NewImageId, NewImageFilename);
                             // TODO Compress after download using qemu-img? DoCompress();
-                            // TODO Delete old images from Luna Node as well as local filesystem DoCleanup();
+                            await DoCleanup(client, NewImageId, NewImagePrefix, NewImageFilename);
                         }
                         catch (LNDException lndex)
                         {
@@ -135,6 +136,39 @@ namespace lndbackup
             Console.WriteLine("REGIONS");
             Console.WriteLine();
             Console.WriteLine("     Currently available regions are toronto, montreal, and roubaix");
+        }
+
+        private static async Task DoCleanup(LNDynamic client, int newImageId, string newImagePrefix, string newImageFilename)
+        {
+            Console.WriteLine("  - Removing previous snapshot images from Luna Node...");
+            var ImagesToDelete = (await client.ImageListAsync()).Where(x => x.name.StartsWith(newImagePrefix) && x.image_id != newImageId);
+            if (ImagesToDelete.Any())
+            {
+                foreach (var ImageToDelete in ImagesToDelete)
+                {
+                    await client.ImageDeleteAsync(ImageToDelete.image_id);
+                    Console.WriteLine($"    - Previous snapshot image {ImageToDelete.image_id} deleted!");
+                }
+            }
+            else
+            {
+                Console.WriteLine("    - No previous snapshot images found!");
+            }
+
+            Console.WriteLine("  - Removing previous snapshots from local filesystem...");
+            var FilesToDelete = Directory.GetFiles(Path.GetDirectoryName(newImageFilename)).Where(x => x != newImageFilename);
+            if (FilesToDelete.Any())
+            {
+                foreach (var FileToDelete in FilesToDelete)
+                {
+                    File.Delete(FileToDelete);
+                    Console.WriteLine($"    - Previous snapshot image {FileToDelete} deleted!");
+                }
+            }
+            else
+            {
+                Console.WriteLine("    - No previous snapshot images found!");
+            }
         }
 
         private static async Task DoDownload(LNDynamic client, int imageId, string filename)
