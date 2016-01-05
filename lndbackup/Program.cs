@@ -15,59 +15,11 @@ namespace lndbackup
     {
         static void Main(string[] args)
         {
-            MainAsync(args).GetAwaiter().GetResult();
-        }
-
-        static async Task MainAsync(string[] args)
-        {
             if (args.Length == 5)
             {
                 try
                 {
-                    string Source = args[0];
-                    string DestinationRegion = args[1];
-                    string DestinationDirectory = args[2];
-                    string APIID = args[3];
-                    string APIKey = args[4];
-
-                    // Ensure destination directory exists, or program fails right away if it can't be created
-                    Directory.CreateDirectory(DestinationDirectory);
-
-                    using (LNDynamic client = new LNDynamic(APIID, APIKey))
-                    {
-                        List<int> VMIDsToBackup = await GetVMIDsToBackup(client, Source);
-                        if (VMIDsToBackup.Count == 0)
-                        {
-                            Console.WriteLine("Nothing to backup!");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Found {VMIDsToBackup.Count} VMs to backup");
-                            foreach (int VMID in VMIDsToBackup)
-                            {
-                                try
-                                {
-                                    await HandleBackup(client, VMID, DestinationRegion, DestinationDirectory);
-                                }
-                                catch (LNDException lndex)
-                                {
-                                    Console.WriteLine($"lndapi error: {(Debugger.IsAttached ? lndex.ToString() : lndex.Message)}");
-                                    Console.WriteLine();
-                                    Console.WriteLine("  - Moving on to next VM to backup...");
-                                    Console.WriteLine();
-                                    Console.WriteLine();
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine($"fatal error: {(Debugger.IsAttached ? ex.ToString() : ex.Message)}");
-                                    Console.WriteLine();
-                                    Console.WriteLine("  - Moving on to next VM to backup...");
-                                    Console.WriteLine();
-                                    Console.WriteLine();
-                                }
-                            }
-                        }
-                    }
+                    MainAsync(args).GetAwaiter().GetResult();
                 }
                 catch (LNDException lndex)
                 {
@@ -87,6 +39,66 @@ namespace lndbackup
             }
 
             if (Debugger.IsAttached) Console.ReadKey();
+        }
+
+        static async Task MainAsync(string[] args)
+        {
+            string Source = args[0];
+            string DestinationRegion = args[1];
+            string DestinationDirectory = args[2];
+            string APIID = args[3];
+            string APIKey = args[4];
+
+            // Ensure destination directory exists, or program fails right away if it can't be created
+            Directory.CreateDirectory(DestinationDirectory);
+
+            using (LNDynamic client = new LNDynamic(APIID, APIKey))
+            {
+                List<int> VMIDsToBackup = await GetVMIDsToBackup(client, Source);
+                if (VMIDsToBackup.Count == 0)
+                {
+                    Console.WriteLine("Nothing to backup!");
+                }
+                else
+                {
+                    Console.WriteLine($"Found {VMIDsToBackup.Count} VMs to backup");
+                    foreach (int VMID in VMIDsToBackup)
+                    {
+                        try
+                        {
+                            Console.WriteLine($"- Backing up VMID {VMID}...");
+                            var Details = await client.VMInfoAsync(VMID);
+                            Console.WriteLine($"  - hostname: {Details.extra.hostname}");
+                            Console.WriteLine($"  - region  : {Details.extra.region}");
+
+                            string NewImageName = $"lndbackup {VMID} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
+                            string NewImageFilename = Path.Combine(DestinationDirectory, string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img");
+
+                            int NewImageId = await DoSnapshot(client, VMID, NewImageName);
+                            if (Details.extra.region != DestinationRegion) NewImageId = await DoReplicate(client, NewImageId, DestinationRegion);
+                            await DoDownload(client, NewImageId, NewImageFilename);
+                            // TODO Compress after download using qemu-img? DoCompress();
+                            // TODO Delete old images from Luna Node as well as local filesystem DoCleanup();
+                        }
+                        catch (LNDException lndex)
+                        {
+                            Console.WriteLine($"lndapi error: {(Debugger.IsAttached ? lndex.ToString() : lndex.Message)}");
+                            Console.WriteLine();
+                            Console.WriteLine("  - Moving on to next VM to backup...");
+                            Console.WriteLine();
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"fatal error: {(Debugger.IsAttached ? ex.ToString() : ex.Message)}");
+                            Console.WriteLine();
+                            Console.WriteLine("  - Moving on to next VM to backup...");
+                            Console.WriteLine();
+                            Console.WriteLine();
+                        }
+                    }
+                }
+            }
         }
 
         private static void DisplayUsage()
@@ -125,6 +137,67 @@ namespace lndbackup
             Console.WriteLine("     Currently available regions are toronto, montreal, and roubaix");
         }
 
+        private static async Task DoDownload(LNDynamic client, int imageId, string filename)
+        {
+            // TODO Faster to download from Toronto for me -- maybe have option to specify preferred region to download
+            //      from, so in my case it would download from Toronto before replicating to Roubaix?
+            Console.WriteLine($"  - Downloading image {imageId} to {filename}...");
+
+            await client.ImageRetrieveAsync(imageId, filename, (s, e) =>
+            {
+                Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} bytes ({e.ProgressPercentage:P})...");
+            });
+            Console.WriteLine();
+
+            Console.WriteLine("    - Image downloaded successfully!");
+            // TODO Validate checksum (here or in lndapi)?
+        }
+
+        private static async Task<int> DoReplicate(LNDynamic client, int imageId, string destinationRegion)
+        {
+            Console.WriteLine($"  - Replicating snapshot image to {destinationRegion}...");
+
+            int ReplicatedImageId = await client.ImageReplicateAndWaitAsync(imageId, destinationRegion, 60, 3, (s, e) =>
+            {
+                Console.WriteLine($"    - New replication image {e.ImageId} queued for creation!");
+            }, (s, e) =>
+            {
+                Console.WriteLine($"      - Image status is '{e.Status}', waiting {e.WaitSeconds} seconds for 'active'...");
+            }, (s, e) =>
+            {
+                Console.WriteLine($"    - Retry {e.RetryNumber} of {e.MaxRetries}");
+            });
+
+            Console.WriteLine("      - Image status is 'active'!");
+
+            // Delete original image, leaving only replicated image
+            Console.WriteLine($"  - Removing original snapshot...");
+            await client.ImageDeleteAsync(imageId);
+            Console.WriteLine($"    - Original snapshot {imageId} deleted!");
+
+            return ReplicatedImageId;
+        }
+
+        private static async Task<int> DoSnapshot(LNDynamic client, int vmId, string newImageName)
+        {
+            Console.WriteLine($"  - Creating snapshot image...");
+
+            int NewImageId = await client.VMSnapshotAndWaitAsync(vmId, newImageName, 60, 3, (s, e) =>
+            {
+                Console.WriteLine($"    - New snapshot image {e.ImageId} queued for creation!");
+            }, (s, e) =>
+            {
+                Console.WriteLine($"      - Image status is '{e.Status}', waiting {e.WaitSeconds} seconds for 'active'...");
+            }, (s, e) =>
+            {
+                Console.WriteLine($"    - Retry {e.RetryNumber} of {e.MaxRetries}");
+            });
+
+            Console.WriteLine("      - Image status is 'active'!");
+
+            return NewImageId;
+        }
+
         private static async Task<List<int>> GetVMIDsToBackup(LNDynamic client, string source)
         {
             List<int> Result = new List<int>();
@@ -145,69 +218,6 @@ namespace lndbackup
             }
 
             return Result;
-        }
-
-        private static async Task HandleBackup(LNDynamic client, int vmId, string destinationRegion, string destinationDirectory)
-        {
-            Console.WriteLine($"- Backing up VMID {vmId}...");
-            var Details = await client.VMInfoAsync(vmId);
-            Console.WriteLine($"  - hostname: {Details.extra.hostname}");
-            Console.WriteLine($"  - region  : {Details.extra.region}");
-
-            // Take a snapshot of the VM
-            Console.WriteLine($"  - Creating snapshot image...");
-            string NewImageName = $"lndbackup {vmId} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
-            int NewImageId = await client.VMSnapshotAndWaitAsync(vmId, NewImageName, 60, 3, (s, e) =>
-            {
-                Console.WriteLine($"    - New snapshot image {e.ImageId} queued for creation!");
-            }, (s, e) =>
-            {
-                Console.WriteLine($"      - Image status is '{e.Status}', waiting {e.WaitSeconds} seconds for 'active'...");
-            }, (s, e) =>
-            {
-                Console.WriteLine($"    - Retry {e.RetryNumber} of {e.MaxRetries}");
-            });
-            Console.WriteLine("      - Image status is 'active'!");
-
-            // Replicate image to new region (if necessary)
-            if (Details.extra.region != destinationRegion)
-            {
-                // Replicate the image to the new region
-                Console.WriteLine($"  - Replicating snapshot image to {destinationRegion}...");
-                int ReplicatedImageId = await client.ImageReplicateAndWaitAsync(NewImageId, destinationRegion, 60, 3, (s, e) =>
-                {
-                    Console.WriteLine($"    - New replication image {e.ImageId} queued for creation!");
-                }, (s, e) =>
-                {
-                    Console.WriteLine($"      - Image status is '{e.Status}', waiting {e.WaitSeconds} seconds for 'active'...");
-                }, (s, e) =>
-                {
-                    Console.WriteLine($"    - Retry {e.RetryNumber} of {e.MaxRetries}");
-                });
-                Console.WriteLine("      - Image status is 'active'!");
-                
-                // Delete original image, leaving only replicated image
-                Console.WriteLine($"  - Removing original snapshot...");
-                await client.ImageDeleteAsync(NewImageId);
-                Console.WriteLine($"    - Original snapshot {NewImageId} deleted!");
-
-                NewImageId = ReplicatedImageId;
-            }
-
-            // Download new image
-            // TODO Faster to download from Toronto for me -- maybe have option to specify preferred region to download
-            //      from, so in my case it would download from Toronto before replicating to Roubaix
-            string CleanFilename = string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img";
-            Console.WriteLine($"  - Downloading image {NewImageId} to {Path.Combine(destinationDirectory, CleanFilename)}...");
-            await client.ImageRetrieveAsync(NewImageId, Path.Combine(destinationDirectory, CleanFilename), (s, e) =>
-            {
-                Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} bytes ({e.ProgressPercentage:P})...");
-            });
-            Console.WriteLine();
-            Console.WriteLine("    - Image downloaded successfully!");
-
-            // TODO Use client.ImageList to find old lndbackup generated images for this VM and delete them
-            // TODO Also delete old lndbackup generated images for this VM from the local filesystem
         }
     }
 }
