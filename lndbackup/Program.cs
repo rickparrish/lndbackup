@@ -75,10 +75,10 @@ namespace lndbackup
                             string NewImageName = $"{NewImagePrefix} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
                             string NewImageFilename = Path.Combine(DestinationDirectory, string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img");
 
-                             int NewImageId = await DoSnapshot(client, VMID, NewImageName);
-                             await DoDownload(client, NewImageId, NewImageFilename);
+                            int NewImageId = await DoSnapshot(client, VMID, NewImageName);
+                            await DoDownload(client, NewImageId, NewImageFilename);
                             // TODO Compress after download using qemu-img? DoCompress();
-                             if (Details.extra.region != DestinationRegion) NewImageId = await DoReplicate(client, NewImageId, DestinationRegion);
+                            if (Details.extra.region != DestinationRegion) NewImageId = await DoReplicate(client, NewImageId, DestinationRegion);
                             await DoCleanup(client, NewImageId, NewImagePrefix, NewImageFilename);
                         }
                         catch (LNDException lndex)
@@ -175,9 +175,15 @@ namespace lndbackup
         {
             Console.WriteLine($"  - Downloading image {imageId} to {filename}...");
 
+            var LastProgressPercentage = -1.0;
             await client.ImageRetrieveAsync(imageId, filename, (s, e) =>
             {
-                Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} bytes ({e.ProgressPercentage:P})...");
+                // Only update every one hundredth of a percent (cuts cpu usage in half on my pc)
+                if (e.ProgressPercentage - LastProgressPercentage > 0.0001)
+                {
+                    Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} bytes ({e.ProgressPercentage:P})...");
+                    LastProgressPercentage = e.ProgressPercentage;
+                }
             });
             Console.WriteLine();
 
