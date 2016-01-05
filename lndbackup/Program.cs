@@ -75,10 +75,10 @@ namespace lndbackup
                             string NewImageName = $"{NewImagePrefix} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
                             string NewImageFilename = Path.Combine(DestinationDirectory, string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img");
 
-                            int NewImageId = await DoSnapshot(client, VMID, NewImageName);
-                            if (Details.extra.region != DestinationRegion) NewImageId = await DoReplicate(client, NewImageId, DestinationRegion);
-                            await DoDownload(client, NewImageId, NewImageFilename);
+                             int NewImageId = await DoSnapshot(client, VMID, NewImageName);
+                             await DoDownload(client, NewImageId, NewImageFilename);
                             // TODO Compress after download using qemu-img? DoCompress();
+                             if (Details.extra.region != DestinationRegion) NewImageId = await DoReplicate(client, NewImageId, DestinationRegion);
                             await DoCleanup(client, NewImageId, NewImagePrefix, NewImageFilename);
                         }
                         catch (LNDException lndex)
@@ -156,7 +156,7 @@ namespace lndbackup
             }
 
             Console.WriteLine("  - Removing previous snapshots from local filesystem...");
-            var FilesToDelete = Directory.GetFiles(Path.GetDirectoryName(newImageFilename)).Where(x => x != newImageFilename);
+            var FilesToDelete = Directory.GetFiles(Path.GetDirectoryName(newImageFilename), $"{newImagePrefix}*", SearchOption.TopDirectoryOnly).Where(x => Path.GetFileName(x) != Path.GetFileName(newImageFilename));
             if (FilesToDelete.Any())
             {
                 foreach (var FileToDelete in FilesToDelete)
@@ -173,8 +173,6 @@ namespace lndbackup
 
         private static async Task DoDownload(LNDynamic client, int imageId, string filename)
         {
-            // TODO Faster to download from Toronto for me -- maybe have option to specify preferred region to download
-            //      from, so in my case it would download from Toronto before replicating to Roubaix?
             Console.WriteLine($"  - Downloading image {imageId} to {filename}...");
 
             await client.ImageRetrieveAsync(imageId, filename, (s, e) =>
