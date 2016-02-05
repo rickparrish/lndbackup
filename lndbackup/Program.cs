@@ -68,11 +68,11 @@ namespace lndbackup
                         {
                             Console.WriteLine($"- Backing up VMID {VMID}...");
                             var Details = await client.VMInfoAsync(VMID);
-                            Console.WriteLine($"  - hostname: {Details.extra.hostname}");
-                            Console.WriteLine($"  - region  : {Details.extra.region}");
+                            Console.WriteLine($"  - name   : {Details.extra.name}");
+                            Console.WriteLine($"  - region : {Details.extra.region}");
 
                             string NewImagePrefix = $"lndbackup {VMID}";
-                            string NewImageName = $"{NewImagePrefix} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.hostname}";
+                            string NewImageName = $"{NewImagePrefix} {DateTime.Now.ToString("yyyy-MM-dd")} {Details.extra.name}";
                             string NewImageFilename = Path.Combine(DestinationDirectory, string.Join("_", NewImageName.Split(Path.GetInvalidFileNameChars())) + ".img");
 
                             int NewImageId = await DoSnapshot(client, VMID, NewImageName);
@@ -141,7 +141,7 @@ namespace lndbackup
         private static async Task DoCleanup(LNDynamic client, int newImageId, string newImagePrefix, string newImageFilename)
         {
             Console.WriteLine("  - Removing previous snapshot images from Luna Node...");
-            var ImagesToDelete = (await client.ImageListAsync()).Where(x => x.name.StartsWith(newImagePrefix) && x.image_id != newImageId);
+            var ImagesToDelete = (await client.ImageListAsync()).Where(x => x.name.StartsWith($"{newImagePrefix} ") && x.image_id != newImageId);
             if (ImagesToDelete.Any())
             {
                 foreach (var ImageToDelete in ImagesToDelete)
@@ -156,7 +156,7 @@ namespace lndbackup
             }
 
             Console.WriteLine("  - Removing previous snapshots from local filesystem...");
-            var FilesToDelete = Directory.GetFiles(Path.GetDirectoryName(newImageFilename), $"{newImagePrefix}*", SearchOption.TopDirectoryOnly).Where(x => Path.GetFileName(x) != Path.GetFileName(newImageFilename));
+            var FilesToDelete = Directory.GetFiles(Path.GetDirectoryName(newImageFilename), $"{newImagePrefix} *", SearchOption.TopDirectoryOnly).Where(x => Path.GetFileName(x) != Path.GetFileName(newImageFilename));
             if (FilesToDelete.Any())
             {
                 foreach (var FileToDelete in FilesToDelete)
@@ -175,20 +175,33 @@ namespace lndbackup
         {
             Console.WriteLine($"  - Downloading image {imageId} to {filename}...");
 
-            var LastProgressPercentage = -1.0;
-            await client.ImageRetrieveAsync(imageId, filename, (s, e) =>
+            try
             {
+                var LastProgressPercentage = -1.0;
+                await client.ImageRetrieveAsync(imageId, filename, (s, e) =>
+                {
                 // Only update every one hundredth of a percent (cuts cpu usage in half on my pc)
                 if (e.ProgressPercentage - LastProgressPercentage > 0.0001)
-                {
-                    Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} bytes ({e.ProgressPercentage:P})...");
-                    LastProgressPercentage = e.ProgressPercentage;
-                }
-            });
-            Console.WriteLine();
+                    {
+                        Console.Write($"\r    - Downloaded {e.BytesReceived:n0} of {e.TotalBytesToReceive:n0} bytes ({e.ProgressPercentage:P})...");
+                        LastProgressPercentage = e.ProgressPercentage;
+                    }
+                });
+                Console.WriteLine();
 
-            Console.WriteLine("    - Image downloaded successfully!");
-            // TODO Validate checksum (here or in lndapi)?
+                Console.WriteLine("    - Image downloaded successfully!");
+                // TODO Validate checksum (here or in lndapi)?
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine();
+                Console.WriteLine("    - Image downloaded failed!");
+                Console.WriteLine("      - Message: " + ex.Message);
+
+                // TODO Is resume supported by the LND API?  If so, retry instead of delete
+                // TODO If resume is not supported, then maybe queue up and prompt to re-download at end of program?
+                File.Delete(filename);
+            }
         }
 
         private static async Task<int> DoReplicate(LNDynamic client, int imageId, string destinationRegion)
